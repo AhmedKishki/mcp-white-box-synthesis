@@ -1,30 +1,18 @@
-"""Verification logic for white-box-synthesis.
-
-Deliberately free of MCP, network and model dependencies so it can be tested
-directly.
-
-What this module guarantees
----------------------------
-The property under verification is *human-ness*, not meaning. Meaning is the
-human editor's job. This module only certifies that every character of the
-submitted output is either verbatim human text from a source passage, or the
-product of a declared, bounded transformation of one.
-
-Consequences of that framing:
-
-- COPY only ever reproduces human text, so resolving the span *is* the check.
-- DELETE and ORDER remove or move human text. Neither can introduce machine
-  text, so both are legal by construction and need no semantic check. They
-  are recorded for the human's audit, not verified.
-- INFLECT and NORMALISE alter characters. They are the only places machine
-  text can enter, so they are the only operations that will ever need real
-  verification. In v0 they are logged as unverified.
-"""
+"""Legacy flat derivation verification."""
 
 from __future__ import annotations
 
 import re
 from typing import Any
+
+from .records import (
+    assessment_record,
+    contract_record,
+    index_passages,
+    validate_candidate,
+    validate_output_context,
+    validate_record_version,
+)
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -38,7 +26,6 @@ VERIFIED = "verified"
 UNVERIFIED = "unverified"
 FAILED = "failed"
 
-# The six typed gaps from the skill. A gap is a successful outcome.
 GAP_TYPES = frozenset({
     "Missing user wording",
     "Missing evidence",
@@ -59,34 +46,17 @@ GAP_FIELDS = (
 
 
 def normalise_whitespace(text: str) -> str:
-    """Collapse every run of whitespace to one space and strip the ends.
-
-    Used for readable reporting, not for the authoritative comparison.
-    """
+    """Collapse whitespace for legacy reporting."""
     return _WHITESPACE.sub(" ", text).strip()
 
 
 def strip_whitespace(text: str) -> str:
-    """Remove every whitespace character.
-
-    This is the authoritative form for the reconstruction check. Whitespace is
-    not content, so spacing is left entirely to the agent: it can join spans
-    with a space, without one, or across a paragraph break, and none of those
-    can introduce machine text. Every other character difference still fails.
-
-    The cost is that a run-together join like "theunion" passes. That is a
-    typo rather than a human-ness violation, and it belongs to the human's
-    proofing pass.
-    """
+    """Remove whitespace for the legacy reconstruction check."""
     return _WHITESPACE.sub("", text)
 
 
 def locate(haystack: str, needle: str, occurrence: int) -> tuple[int, int] | None:
-    """Return the (start, end) offsets of the nth occurrence of needle.
-
-    Occurrences are counted from position 1, and overlapping matches count.
-    Returns None if there is no such occurrence.
-    """
+    """Return offsets for a one-indexed, possibly overlapping occurrence."""
     if occurrence < 1 or not needle:
         return None
     index = -1
@@ -110,13 +80,13 @@ def _entry(index: int, op_type: str, status: str, method: str, detail: str, **ex
 
 
 def _check_operation(index: int, op: Any, passages: dict[str, dict]) -> tuple[dict, str | None]:
-    """Verify one operation.
-
-    Returns the report entry and the text this operation contributes to the
-    output, or None when it contributes nothing.
-    """
+    """Verify one legacy operation."""
     if not isinstance(op, dict):
         return _entry(index, "?", FAILED, "structure", "Operation is not an object."), None
+
+    problem = validate_record_version(op, f"operations[{index}]")
+    if problem:
+        return _entry(index, str(op.get("type", "?")), FAILED, "structure", problem), None
 
     op_type = op.get("type")
     if op_type not in KNOWN_OPS:
@@ -132,16 +102,25 @@ def _check_operation(index: int, op: Any, passages: dict[str, dict]) -> tuple[di
     text = op.get("text")
     occurrence = op.get("occurrence", 1)
 
-    if not isinstance(passage_id, str) or not isinstance(text, str):
+    if (
+        not isinstance(passage_id, str)
+        or not passage_id.strip()
+        or not isinstance(text, str)
+        or not text
+    ):
         return _entry(
             index, op_type, FAILED, "structure",
-            "Operation needs a string passage_id and a string text.",
+            "Operation needs a non-empty string passage_id and text.",
         ), None
 
-    if not isinstance(occurrence, int) or isinstance(occurrence, bool):
+    if (
+        not isinstance(occurrence, int)
+        or isinstance(occurrence, bool)
+        or occurrence < 1
+    ):
         return _entry(
             index, op_type, FAILED, "structure",
-            "occurrence must be an integer.",
+            "occurrence must be a positive integer.",
         ), None
 
     passage = passages.get(passage_id)
@@ -185,14 +164,19 @@ def _check_operation(index: int, op: Any, passages: dict[str, dict]) -> tuple[di
 
     if op_type in SILENT_OPS:
         note = op.get("note")
+        if note is not None and not isinstance(note, str):
+            return _entry(
+                index, op_type, FAILED, "structure",
+                "note must be a string when provided.",
+                **common,
+            ), None
         return _entry(
             index, op_type, VERIFIED, "legal_by_construction",
-            "Removes or reorders human text, so it cannot introduce machine "
-            "text. Recorded for audit, not checked.",
+            "Cannot introduce new characters under the current policy. "
+            "Recorded for audit; semantic legality is not assessed.",
             note=note, **common,
         ), None
 
-    # INFLECT and NORMALISE both alter characters.
     output_text = op.get("output_text")
     if not isinstance(output_text, str) or not output_text:
         return _entry(
@@ -220,16 +204,11 @@ def _check_operation(index: int, op: Any, passages: dict[str, dict]) -> tuple[di
 
 
 def _basis_code(passage_id: str) -> str:
-    """Basis codes are written A4, not src:A4."""
-    return passage_id[4:] if passage_id.startswith("src:") else passage_id
+    return passage_id.removeprefix("src:")
 
 
 def _declaration(report: list[dict], reconstruction_ok: bool) -> dict:
-    """Derive the compact provenance declaration mechanically.
-
-    Field values come from the provenance contract. Nothing here is a
-    judgment call: each field falls out of what was actually checked.
-    """
+    """Derive the legacy provenance declaration."""
     content = [e for e in report if e["type"] in CONTENT_OPS]
     used = [e for e in report if e.get("passage_id") and e["status"] != FAILED]
 
@@ -241,17 +220,14 @@ def _declaration(report: list[dict], reconstruction_ok: bool) -> dict:
 
     blocked = any(e["status"] == FAILED for e in report) or not reconstruction_ok
     altering = [e for e in content if e["type"] != "COPY"]
-    passage_ids = {e["passage_id"] for e in content}
+    passage_ids = {e["passage_id"] for e in content if e.get("passage_id")}
 
     if blocked:
-        # An original, location or operation could not be established.
         provenance = "Unverified"
         human_wording = "Unverified"
         method = "white-box synthesis"
     else:
         if altering:
-            # INFLECT and NORMALISE are logged, not checked, so the
-            # reconstruction test is incomplete for them.
             human_wording = "Unverified"
         else:
             human_wording = "100%"
@@ -286,13 +262,51 @@ def _check_gap(gap: Any) -> str | None:
     """Return an error message when the gap is not properly typed."""
     if not isinstance(gap, dict):
         return "gap must be an object."
+    problem = validate_record_version(gap, "gap")
+    if problem:
+        return problem
     gap_type = gap.get("type")
     if gap_type not in GAP_TYPES:
         return f"gap type must be one of {sorted(GAP_TYPES)}."
     missing = [f for f in GAP_FIELDS if not gap.get(f)]
     if missing:
         return f"gap is missing required field(s): {', '.join(missing)}."
+    string_fields = GAP_FIELDS[:-1]
+    invalid_strings = [
+        field
+        for field in string_fields
+        if not isinstance(gap[field], str) or not gap[field].strip()
+    ]
+    if invalid_strings:
+        return (
+            "gap field(s) must be non-empty strings: "
+            + ", ".join(invalid_strings)
+            + "."
+        )
+    paths = gap["resolution_paths"]
+    if (
+        not isinstance(paths, list)
+        or not paths
+        or any(not isinstance(path, str) or not path.strip() for path in paths)
+    ):
+        return "gap.resolution_paths must be a non-empty list of non-empty strings."
     return None
+
+
+def _rejection(error: str) -> dict:
+    """Build a versioned validation rejection."""
+    return {
+        "contract": contract_record(),
+        "status": "rejected",
+        "error": error,
+        "assessment": assessment_record(
+            mechanical_status="failed",
+            record_validation="failed",
+            unverified_indexes=None,
+            human_review="not_applicable",
+            mechanical_detail="The submitted record is invalid.",
+        ),
+    }
 
 
 def verify(
@@ -303,48 +317,45 @@ def verify(
 ) -> dict:
     """Verify one submitted derivation, or record a declared gap."""
     if (candidate is None) == (gap is None):
-        return {
-            "status": "rejected",
-            "error": "Submit exactly one of candidate or gap.",
-        }
+        return _rejection("Submit exactly one of candidate or gap.")
 
-    if not isinstance(passages, list) or not passages:
-        return {"status": "rejected", "error": "At least one passage is required."}
+    problem = validate_output_context(output_context)
+    if problem:
+        return _rejection(problem)
 
-    by_id: dict[str, dict] = {}
-    for passage in passages:
-        if not isinstance(passage, dict):
-            return {"status": "rejected", "error": "Each passage must be an object."}
-        pid, ptext = passage.get("id"), passage.get("text")
-        if not isinstance(pid, str) or not isinstance(ptext, str):
-            return {
-                "status": "rejected",
-                "error": "Each passage needs a string id and a string text.",
-            }
-        if pid in by_id:
-            return {"status": "rejected", "error": f"Duplicate passage id {pid!r}."}
-        by_id[pid] = passage
+    by_id, problem = index_passages(passages)
+    if problem:
+        return _rejection(problem)
+    assert by_id is not None
 
     if gap is not None:
         problem = _check_gap(gap)
         if problem:
-            return {"status": "rejected", "error": problem}
+            return _rejection(problem)
         return {
+            "contract": contract_record(),
             "status": "gap",
             "output_context": output_context,
             "gap": gap,
+            "assessment": assessment_record(
+                mechanical_status="not_applicable",
+                record_validation="passed",
+                unverified_indexes=None,
+                human_review="required",
+                mechanical_detail="No candidate derivation was submitted.",
+            ),
             "sources": [
                 {"id": p["id"], "source": p.get("source")} for p in passages
             ],
         }
 
+    problem = validate_candidate(candidate)
+    if problem:
+        return _rejection(problem)
+    assert isinstance(candidate, dict)
     operations = candidate.get("operations")
     output = candidate.get("output")
-    if not isinstance(output, str) or not isinstance(operations, list):
-        return {
-            "status": "rejected",
-            "error": "candidate needs a string output and a list of operations.",
-        }
+    assert isinstance(output, str) and isinstance(operations, list)
 
     report: list[dict] = []
     contributions: list[str] = []
@@ -355,6 +366,10 @@ def verify(
             contributions.append(contribution)
 
     failed = [e for e in report if e["status"] == FAILED]
+    record_valid = not any(
+        entry["status"] == FAILED and entry["method"] == "structure"
+        for entry in report
+    )
 
     reconstruction_ok = strip_whitespace("".join(contributions)) == strip_whitespace(output)
 
@@ -373,9 +388,24 @@ def verify(
         reconstruction_entry["submitted"] = normalise_whitespace(output)
 
     accepted = not failed and reconstruction_ok
+    unverified_indexes = [
+        entry["index"] for entry in report if entry["status"] == UNVERIFIED
+    ]
 
     return {
+        "contract": contract_record(),
         "status": "accepted" if accepted else "rejected",
+        "assessment": assessment_record(
+            mechanical_status="passed" if accepted else "failed",
+            record_validation="passed" if record_valid else "failed",
+            unverified_indexes=unverified_indexes,
+            human_review="required" if accepted else "not_applicable",
+            mechanical_detail=(
+                "Source spans resolved and the candidate reconstruction matched."
+                if accepted
+                else "At least one operation or the candidate reconstruction failed."
+            ),
+        ),
         "declaration": _declaration(report, reconstruction_ok),
         "output": output,
         "output_context": output_context,
@@ -389,7 +419,8 @@ def verify(
         },
         "sources": [{"id": p["id"], "source": p.get("source")} for p in passages],
         "note": (
-            "Human-ness is verified, meaning is not. Unverified operations are "
-            "recorded claims, not checked facts. Proof the meaning yourself."
+            "Mechanical source-wording checks passed only where reported. "
+            "Unverified operations are recorded claims, agent support was not "
+            "assessed, and human review of meaning remains required."
         ),
     }

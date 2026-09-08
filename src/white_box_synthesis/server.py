@@ -1,7 +1,4 @@
-"""MCP server for white-box-synthesis.
-
-A thin transport layer. All verification lives in verify.py.
-"""
+"""MCP adapters for white-box synthesis."""
 
 from __future__ import annotations
 
@@ -9,91 +6,85 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from .synthesis import synthesise as _synthesise
 from .verify import verify as _verify
 
-mcp = MCPServer("white-box-synthesis", version="0.1.0")
+mcp = MCPServer("white-box-synthesis", version="0.2.0")
 
 PROCESS_PROMPT = """\
-You are performing white-box-synthesis: producing one output passage from N
-human-written input passages, using only transformations that preserve the
-human-ness of the text.
+Construct one approved passage with `synthesise`. Match its ordered arguments
+to approved human-authored fragments. Submit one operations record per argument.
+Source wording must come from complete words, phrases or clauses; do not write
+new prose or assemble words from source characters.
 
-Read this carefully, because it is the point of the whole exercise. The
-verifier does not check meaning. Meaning is the human editor's job, and they
-will proof it after you. What the verifier checks is that every character you
-output is either verbatim human text from a source passage, or the product of
-a declared, bounded transformation of one. Nothing you write may originate
-with you.
+COPY emits an exact span using fragment_id, text and optional occurrence.
+INFLECT uses the same source fields, output_text and axes (tense, number, case,
+article or pronoun). NORMALISE uses the source fields and output_text for case,
+punctuation or spelling. Content operations have an optional separator: none,
+space or paragraph. Spacing follows each piece through ORDER; the first emitted
+piece has no leading separator. DELETE uses target (an unchanged piece's operation
+index), text and optional occurrence to remove wording. ORDER uses order, a permutation of all emitted
+content operation indexes, to set their final order. Indexes are zero-based.
 
-You will be given source passages, each with an id and a citation label, and
-an output context describing what your output should support.
+Submit candidate.records with argument_id and operations. The server derives
+result_span and passage; supplied values are exact assertions. Unchecked edits
+remain Unverified and block selection. Provenance describes wording lineage;
+it does not establish preserved meaning or causality. Human review is required.
 
-Five operations are licensed.
+If construction is blocked, report a typed gap with passage_id, argument_id,
+missing_requirement, authoritative_owner, question and resolution_paths. Types:
+Missing user wording, Missing evidence, Unsupported connection, Source-context
+ambiguity, Arc inconsistency, Constraint conflict.
 
-COPY
-    Reproduce an exact, contiguous, unmodified span. Verified exactly.
-
-DELETE
-    Omit a span. You do not need to justify this semantically. Removing human
-    text cannot introduce machine text, so deletion is free. Record it anyway,
-    with a note, because the human proofing your output needs to see what was
-    cut.
-
-ORDER
-    Arrange spans. Also free, for the same reason. The order of your
-    operations list already determines the order of the output, so ORDER is
-    recorded as an annotation rather than checked.
-
-INFLECT
-    Change only tense, grammatical number, grammatical case, article, or an
-    unambiguous pronoun. Declare which axis. "workers are" to "a worker is" is
-    legal. "may" to "will" is not: that is modality, not inflection.
-
-NORMALISE
-    Meaning-neutral spelling, capitalisation or punctuation changes only.
-    Never substitute vocabulary.
-
-INFLECT and NORMALISE are the two operations that alter characters, so they
-are the two places machine text could enter. Right now the verifier logs them
-without checking them. Be strict with yourself there, since nothing else will
-be.
-
-Punctuation does not travel for free. If a source has a comma where your
-output needs a full stop, that is a NORMALISE operation and you must declare
-it. It cannot arrive through the join. Spacing and paragraph breaks are the
-exception: those are yours to choose and are not checked.
-
-For every operation give the passage id, the exact source text quoted
-verbatim, and which occurrence of that text within the passage you mean
-(1 for the first). The verifier locates the span itself and will reject you if
-your quotation is not exactly right.
-
-If no legal derivation supports the output context, do not force one. Report a
-typed gap instead. A gap is a successful outcome, not a failure. Use exactly
-one of these types:
-
-    Missing user wording, Missing evidence, Unsupported connection,
-    Source-context ambiguity, Arc inconsistency, Constraint conflict
-
-and give all six fields: passage_id, argument_id, missing_requirement,
-authoritative_owner, one focused question, and allowed resolution_paths.
-
-Every derivation returns a compact provenance declaration, derived
-mechanically from what was actually checked. Note what this means right now:
-because INFLECT and NORMALISE are logged rather than checked, any derivation
-using either declares "Human wording: Unverified" and blocks selection. Only
-COPY, DELETE and ORDER can reach 100%. That is not a bug you should work
-around by mislabelling operations. It is the verifier being honest about what
-it has confirmed.
-
-Submit through the verify_synthesis tool.
+Record observed causal gaps or source contradictions separately in optional
+candidate.diagnostics: type (causal_gap or contradiction), argument_id, detail,
+and basis (exact fragment_id, text and optional occurrence references). These
+are agent findings; the core validates their references without assessing them.
 """
 
 
 @mcp.prompt(name="white_box_synthesis_process")
 def white_box_synthesis_process() -> str:
-    """The white-box-synthesis process. Read before attempting a synthesis."""
+    """Minimum white-box synthesis rules."""
     return PROCESS_PROMPT
+
+
+@mcp.tool()
+def synthesise(
+    passage_plan: dict[str, Any],
+    fragments: list[dict[str, Any]],
+    constraints: dict[str, Any] | None = None,
+    candidate: dict[str, Any] | None = None,
+    gap: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute one passage's construction and report wording provenance.
+
+    Schema 2.0: passage_plan needs passage_id, claim and ordered arguments
+    [{id, claim}]; relations are optional metadata. Fragments need id and text;
+    source, locator, context and permitted_use are optional. Omit candidate and
+    gap for an agent work request. Constraints are passed to the calling agent.
+
+    candidate.records contains {argument_id, operations, separator?}; result_span
+    and candidate.passage are optional exact assertions. COPY uses fragment_id,
+    text, occurrence? and separator?. INFLECT adds output_text and axes; NORMALISE
+    adds output_text. DELETE uses target (unchanged piece index), text, occurrence?.
+    ORDER uses order (a permutation of all content operation indexes). Separators
+    are none, space or paragraph; space is the default and the leading separator
+    is omitted. Offsets are zero-based Unicode code points with exclusive ends;
+    piece output spans are relative to their argument, argument spans to passage.
+
+    A gap needs type, passage_id, argument_id, missing_requirement,
+    authoritative_owner, question and resolution_paths. Optional diagnostics
+    contain type (causal_gap or contradiction), argument_id, detail and basis
+    [{fragment_id, text, occurrence?}]. Meaning and causality are not assessed.
+    """
+    return _synthesise(
+        passage_plan,
+        fragments,
+        constraints=constraints,
+        candidate=candidate,
+        gap=gap,
+    )
 
 
 @mcp.tool()
@@ -103,34 +94,7 @@ def verify_synthesis(
     candidate: dict[str, Any] | None = None,
     gap: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Verify a white-box-synthesis derivation, or record a declared gap.
-
-    Checks that every character of the output traces to a declared operation on
-    a declared source span. Does not check meaning: that is the human's job.
-
-    Args:
-        passages: Source passages. Each needs `id` and `text`, and should carry
-            a `source` citation label, which flows through to the report.
-        output_context: What the output passage is meant to support.
-        candidate: `{"output": str, "operations": [...]}`. Each operation needs
-            `type` (COPY, INFLECT, NORMALISE, DELETE or ORDER), `passage_id`,
-            `text` quoted verbatim from that passage, and `occurrence`
-            (1-indexed). INFLECT and NORMALISE also need `output_text`, and
-            INFLECT needs `axis` (tense, number, case, article or pronoun).
-            DELETE and ORDER accept an optional `note`.
-        gap: A typed gap when no legal derivation exists. Needs `type` (one of
-            the six gap types), `passage_id`, `argument_id`,
-            `missing_requirement`, `authoritative_owner`, `question` and
-            `resolution_paths`. Submit exactly one of `candidate` or `gap`.
-
-    Returns:
-        A report with an overall status of accepted, rejected or gap, a
-        per-operation verdict of verified, unverified or failed, the
-        reconstruction result, counts, and a compact provenance declaration.
-        Operations marked `unverified` are recorded claims rather than checked
-        facts, and any derivation containing one declares `Human wording:
-        Unverified`.
-    """
+    """Run the legacy flat derivation check without semantic support checks."""
     return _verify(passages, output_context, candidate=candidate, gap=gap)
 
 

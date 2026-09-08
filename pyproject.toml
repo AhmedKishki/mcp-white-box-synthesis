@@ -1,7 +1,7 @@
 [project]
 name = "white-box-synthesis"
-version = "0.1.0"
-description = "MCP server verifying that a synthesised passage preserves the human-ness of its sources"
+version = "0.2.0"
+description = "MCP server for source-wording white-box synthesis"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

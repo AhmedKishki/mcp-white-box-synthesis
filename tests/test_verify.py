@@ -9,7 +9,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
-from white_box_synthesis.verify import verify, locate, normalise_whitespace
+from white_box_synthesis.records import OPERATION_POLICY_VERSION, SCHEMA_VERSION
+from white_box_synthesis.verify import locate, normalise_whitespace, verify
 
 PASSAGES = [
     {
@@ -37,17 +38,12 @@ def check(label, condition):
         fails += 1
 
 
-# --- locate ---------------------------------------------------------------
 check("locate finds 1st occurrence", locate("a b a b", "a", 1) == (0, 1))
 check("locate finds 2nd occurrence", locate("a b a b", "a", 2) == (4, 5))
 check("locate returns None past the end", locate("a b", "a", 2) is None)
 check("locate returns None when absent", locate("a b", "z", 1) is None)
 check("whitespace collapses", normalise_whitespace(" a \n\n b  ") == "a b")
 
-# --- a clean derivation ---------------------------------------------------
-# Note the NORMALISE: P1 reads "on Tuesday, and again", so turning that comma
-# into a full stop is a punctuation change and must be declared. It cannot
-# arrive silently through the join.
 ops = [
     {"type": "COPY", "passage_id": "P1",
      "text": "The union delegation met with management on Tuesday",
@@ -69,15 +65,28 @@ check("delete is verified by construction",
 check("citation label flows through", r["operations"][0]["source"] == "Smith 2019, p.42")
 check("summary counts", r["summary"] == {"total": 4, "verified": 3,
                                          "unverified": 1, "failed": 0})
+check("report schema is versioned",
+      r["contract"] == {
+          "name": "white-box-synthesis.verify-report",
+          "schema_version": SCHEMA_VERSION,
+          "operation_policy_version": OPERATION_POLICY_VERSION,
+      })
+check("accepted retains mechanical meaning",
+      r["assessment"]["mechanical_validity"]["status"] == "passed")
+check("unchecked work is a separate assessment",
+      r["assessment"]["unverified_work"] == {
+          "status": "present", "operation_indexes": [1]})
+check("semantic support is not implied",
+      r["assessment"]["agent_support"]["status"] == "not_assessed")
+check("human review remains required",
+      r["assessment"]["human_review"]["status"] == "required")
 
-# --- undeclared punctuation is caught ------------------------------------
 r = verify(PASSAGES, CONTEXT, candidate={
     "output": out,
     "operations": [ops[0], ops[2]],
 })
 check("undeclared full stop rejected", r["status"] == "rejected")
 
-# --- whitespace tolerance -------------------------------------------------
 r = verify(PASSAGES, CONTEXT, candidate={
     "output": "The union delegation met with management on Tuesday.\n\n"
               "   Wages were frozen for three years.",
@@ -85,7 +94,6 @@ r = verify(PASSAGES, CONTEXT, candidate={
 })
 check("paragraph break and spacing tolerated", r["status"] == "accepted")
 
-# --- smuggled word --------------------------------------------------------
 r = verify(PASSAGES, CONTEXT, candidate={
     "output": "The union delegation angrily met with management on Tuesday",
     "operations": [ops[0]],
@@ -93,7 +101,6 @@ r = verify(PASSAGES, CONTEXT, candidate={
 check("inserted word rejected", r["status"] == "rejected")
 check("reconstruction flags it", r["reconstruction"]["ok"] is False)
 
-# --- ambiguous span, wrong occurrence ------------------------------------
 r = verify(PASSAGES, CONTEXT, candidate={
     "output": "x",
     "operations": [{"type": "COPY", "passage_id": "P1",
@@ -103,7 +110,6 @@ check("nonexistent occurrence fails", r["operations"][0]["status"] == "failed")
 check("error names the real count",
       "appears 2 time(s)" in r["operations"][0]["detail"])
 
-# --- text not present -----------------------------------------------------
 r = verify(PASSAGES, CONTEXT, candidate={
     "output": "x",
     "operations": [{"type": "COPY", "passage_id": "P1",
@@ -111,7 +117,6 @@ r = verify(PASSAGES, CONTEXT, candidate={
 })
 check("absent text fails", r["operations"][0]["status"] == "failed")
 
-# --- INFLECT is logged, not checked --------------------------------------
 r = verify(PASSAGES, CONTEXT, candidate={
     "output": "A union delegation meets with management on Tuesday",
     "operations": [{
@@ -126,7 +131,6 @@ check("inflect accepted but unverified", r["status"] == "accepted")
 check("inflect marked unverified", r["operations"][0]["status"] == "unverified")
 check("unverified counted", r["summary"]["unverified"] == 1)
 
-# --- INFLECT with a bad axis ---------------------------------------------
 r = verify(PASSAGES, CONTEXT, candidate={
     "output": "x",
     "operations": [{"type": "INFLECT", "passage_id": "P2",
@@ -135,7 +139,6 @@ r = verify(PASSAGES, CONTEXT, candidate={
 })
 check("bad inflect axis rejected", r["operations"][0]["status"] == "failed")
 
-# --- typed gaps -----------------------------------------------------------
 GOOD_GAP = {
     "type": "Missing evidence",
     "passage_id": "1.1",
@@ -147,6 +150,10 @@ GOOD_GAP = {
 }
 r = verify(PASSAGES, CONTEXT, gap=GOOD_GAP)
 check("typed gap returns gap status", r["status"] == "gap")
+check("gap record validation passes",
+      r["assessment"]["mechanical_validity"]["record_validation"] == "passed")
+check("gap has no derivation mechanics",
+      r["assessment"]["mechanical_validity"]["status"] == "not_applicable")
 
 r = verify(PASSAGES, CONTEXT, gap={**GOOD_GAP, "type": "Vibes"})
 check("untyped gap rejected", r["status"] == "rejected")
@@ -160,7 +167,9 @@ check("error names the field",
           gap={k: v for k, v in GOOD_GAP.items() if k != "authoritative_owner"}
       )["error"])
 
-# --- provenance declaration ----------------------------------------------
+r = verify(PASSAGES, CONTEXT, gap={**GOOD_GAP, "resolution_paths": "ask user"})
+check("gap resolution paths must be a list", r["status"] == "rejected")
+
 r = verify(PASSAGES, CONTEXT, candidate={
     "output": "Wages were frozen for three years.",
     "operations": [{"type": "COPY", "passage_id": "P2",
@@ -208,7 +217,6 @@ check("src: prefix stripped from basis",
                  {"type": "COPY", "passage_id": "src:A4", "text": "Wages fell.",
                   "occurrence": 1}]})["declaration"]["basis"] == ["A4"])
 
-# --- structural guards ----------------------------------------------------
 check("both candidate and gap rejected",
       verify(PASSAGES, CONTEXT, candidate={"output": "", "operations": []},
              gap={"reason": "r", "missing": "m"})["status"] == "rejected")
@@ -224,6 +232,49 @@ check("unknown op type fails",
 check("duplicate passage ids rejected",
       verify([PASSAGES[0], PASSAGES[0]], CONTEXT,
              candidate={"output": "x", "operations": []})["status"] == "rejected")
+
+r = verify(PASSAGES, CONTEXT, candidate="not an object")
+check("non-object candidate rejected without crashing", r["status"] == "rejected")
+check("validation rejection is versioned", r["contract"]["schema_version"] == SCHEMA_VERSION)
+check("validation rejection is mechanically failed",
+      r["assessment"]["mechanical_validity"] == {
+          "status": "failed",
+          "record_validation": "failed",
+          "detail": "The submitted record is invalid.",
+      })
+
+r = verify(PASSAGES, "", candidate={"output": "x", "operations": [{}]})
+check("empty output context rejected", r["status"] == "rejected")
+
+r = verify([{**PASSAGES[0], "schema_version": "2.0"}], CONTEXT,
+           candidate={"output": "x", "operations": [{}]})
+check("unsupported passage schema rejected", r["status"] == "rejected")
+check("unsupported schema error is explicit", "schema_version" in r["error"])
+
+r = verify(PASSAGES, CONTEXT, candidate={
+    "schema_version": SCHEMA_VERSION,
+    "output": "The union delegation met twice.",
+    "operations": [{
+        "schema_version": "2.0",
+        "type": "COPY",
+        "passage_id": "P1",
+        "text": "The union delegation met twice.",
+    }],
+})
+check("unsupported operation schema fails the operation",
+      r["operations"][0]["status"] == "failed")
+check("unsupported operation schema fails record validation",
+      r["assessment"]["mechanical_validity"]["record_validation"] == "failed")
+
+r = verify(PASSAGES, CONTEXT, candidate={
+    "output": "The union delegation met twice.",
+    "operations": [{
+        "type": "COPY", "passage_id": "P1",
+        "text": "The union delegation met twice.", "occurrence": 0,
+    }],
+})
+check("non-positive occurrence fails structurally",
+      r["operations"][0]["status"] == "failed")
 
 print()
 print("all passed" if fails == 0 else f"{fails} failing")
