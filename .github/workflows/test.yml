@@ -19,7 +19,7 @@ jobs:
 
       # verify.py has no dependencies at all, so this needs no install step
       - name: Verification logic
-        run: python3 test_verify.py
+        run: python3 tests/test_verify.py
 
       - name: Server starts and speaks the protocol
         run: |

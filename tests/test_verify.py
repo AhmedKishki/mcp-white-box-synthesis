@@ -1,5 +1,13 @@
+"""Run with: python3 tests/test_verify.py
+
+Imports from src/ directly so the verification logic can be tested with no
+install step and no dependencies.
+"""
+
+import pathlib
 import sys
-sys.path.insert(0, "src")
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
 from white_box_synthesis.verify import verify, locate, normalise_whitespace
 

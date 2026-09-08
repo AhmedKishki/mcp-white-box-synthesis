@@ -95,15 +95,20 @@ Installation goes straight from this repository. There is no clone step and no
 PyPI release. [uv](https://docs.astral.sh/uv/) does the work:
 
 ```bash
-uvx --from git+https://github.com/AhmedKishki/white-box-synthesis white-box-synthesis
+uvx --from git+https://github.com/AhmedKishki/mcp-white-box-synthesis white-box-synthesis
 ```
+
+Note the two names differ and both are needed. `--from` takes the **repository**
+(`mcp-white-box-synthesis`); the trailing argument is the **console script**
+(`white-box-synthesis`). Repeating the repo name there fails with an executable
+not found.
 
 It will sit silently waiting for JSON-RPC on stdin. That is correct. Ctrl-C out.
 
 Pin a tag for reproducibility:
 
 ```bash
-uvx --from git+https://github.com/AhmedKishki/white-box-synthesis@v0.1.0 white-box-synthesis
+uvx --from git+https://github.com/AhmedKishki/mcp-white-box-synthesis@v0.1.0 white-box-synthesis
 ```
 
 ### Claude Code
@@ -113,7 +118,7 @@ before the name, and `--` separates them from the launch command:
 
 ```bash
 claude mcp add white-box-synthesis \
-  -- uvx --from git+https://github.com/AhmedKishki/white-box-synthesis white-box-synthesis
+  -- uvx --from git+https://github.com/AhmedKishki/mcp-white-box-synthesis white-box-synthesis
 ```
 
 Scope defaults to local. `--scope project` writes a committable `.mcp.json`,
@@ -128,7 +133,7 @@ Scope defaults to local. `--scope project` writes a committable `.mcp.json`,
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/AhmedKishki/white-box-synthesis",
+        "git+https://github.com/AhmedKishki/mcp-white-box-synthesis",
         "white-box-synthesis"
       ]
     }
@@ -150,8 +155,8 @@ Anyone pinning a tag gets that build. Anyone on the bare URL gets `main`.
 ### Local development
 
 ```bash
-git clone https://github.com/AhmedKishki/white-box-synthesis
-cd white-box-synthesis
+git clone https://github.com/AhmedKishki/mcp-white-box-synthesis
+cd mcp-white-box-synthesis
 uvx --from . white-box-synthesis
 ```
 
@@ -182,7 +187,7 @@ printf '%s\n' \
 ## Tests
 
 ```bash
-python3 test_verify.py
+python3 tests/test_verify.py
 ```
 
 No dependencies. `verify.py` is deliberately free of MCP, network and model
